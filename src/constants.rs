@@ -1,9 +1,7 @@
-pub const CASCADE_XML_FILE_FRONT_FACE: &str = "models/cascade_front.xml";
-pub const CASCADE_XML_FILE_SIDE_FACE: &str = "models/cascade_side.xml";
 pub const CASCADE_XML_FILE: &str = "models/haarcascade_frontalface_alt.xml";
 
-pub const DNN_CAFFE_MODEL_FILE: &str = "models/res10_300x300_ssd_iter_140000_fp16.caffemodel";
-pub const DNN_CAFFE_CONFIG_FILE: &str = "models/deploy.prototxt";
+pub const USE_YUNET: bool = true;
+pub const YUNET_MODEL_FILE: &str = "models/face_detection_yunet_2022mar.onnx";
 pub const DNN_CONFIDENCE_THRESHOLD: f32 = 0.7;
 
 pub const CAPTURE_WIDTH: i32 = 640;
