@@ -5,7 +5,7 @@ mod window;
 use crate::constants::*;
 use anyhow::Result;
 use capture::Capture;
-use opencv::core::{Mat, Ptr, Rect, Scalar, Size};
+use opencv::core::{Mat, Ptr, Rect, Scalar, Size, TickMeter};
 use opencv::{dnn, highgui, imgproc, objdetect, prelude::*, types::VectorOfRect};
 use window::Window;
 
@@ -47,29 +47,17 @@ fn detect_faces(
     classifiers: &mut Vec<&mut objdetect::CascadeClassifier>,
     image: Mat,
 ) -> Result<VectorOfRect> {
-    const SCALE_FACTOR: f64 = 1.1;
-    const MIN_NEIGHBORS: i32 = 2;
-    const FLAGS: i32 = 0;
-    const MIN_FACE_SIZE: Size = Size {
-        width: 30,
-        height: 30,
-    };
-    const MAX_FACE_SIZE: Size = Size {
-        width: 0,
-        height: 0,
-    };
-
     let mut faces = VectorOfRect::new();
 
     for classifier in classifiers.iter_mut() {
         classifier.detect_multi_scale(
             &image,
             &mut faces,
-            SCALE_FACTOR,
-            MIN_NEIGHBORS,
-            FLAGS,
-            MIN_FACE_SIZE,
-            MAX_FACE_SIZE,
+            1f64,
+            2,
+            0,
+            Size::new(30, 30),
+            Size::new(0, 0),
         )?;
     }
     Ok(faces)
@@ -160,8 +148,11 @@ fn frame_loop(
             None => continue,
         };
 
+        let mut tick_meter = TickMeter::default()?;
         if USE_YUNET {
+            tick_meter.start()?;
             let faces = detect_faces_yunet(face_detector, &frame)?;
+            tick_meter.stop()?;
             for face in faces {
                 if USE_BLUR {
                     blur_face(&mut frame, face)?;
@@ -170,8 +161,10 @@ fn frame_loop(
                 }
             }
         } else {
+            tick_meter.start()?;
             let preprocessed = preprocess_image(&frame)?;
             let faces = detect_faces(classifiers, preprocessed)?;
+            tick_meter.stop()?;
             for face in faces {
                 println!("found face {:?}", face);
                 if USE_BLUR {
@@ -182,7 +175,8 @@ fn frame_loop(
             }
         }
 
-        window.show_image(&frame)?;
+        window.show_image(&mut frame, Some(tick_meter.get_fps()?))?;
+        tick_meter.reset()?;
 
         let key = highgui::wait_key(1)?;
         if key == Q_KEY_CODE {

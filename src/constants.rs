@@ -11,6 +11,6 @@ pub const SCALE_FACTOR: f64 = 1f64;
 pub const SCALE_FACTOR_INV: i32 = (1f64 / SCALE_FACTOR) as i32;
 
 pub const USE_BLUR: bool = true;
-pub const BLUR_STRENGTH: i32 = 77;
+pub const BLUR_STRENGTH: i32 = 177;
 
 pub const Q_KEY_CODE: i32 = 113;
