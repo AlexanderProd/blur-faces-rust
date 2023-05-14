@@ -30,6 +30,23 @@ fn equalize_image(reduced: &Mat) -> Result<Mat> {
     Ok(equalized)
 }
 
+fn clamp_rect_to_image_bounds(rect: Rect) -> Rect {
+    let mut rect = rect.clone();
+    if rect.x < 0 {
+        rect.x = 0;
+    }
+    if rect.y < 0 {
+        rect.y = 0;
+    }
+    if rect.x + rect.width > CAPTURE_WIDTH {
+        rect.width = CAPTURE_WIDTH - rect.x;
+    }
+    if rect.y + rect.height > CAPTURE_HEIGHT {
+        rect.height = CAPTURE_HEIGHT - rect.y;
+    }
+    rect
+}
+
 fn detect_faces(
     classifiers: &mut Vec<&mut objdetect::CascadeClassifier>,
     image: Mat,
@@ -142,7 +159,7 @@ fn detect_faces_yunet(
         }
     }
 
-    Ok((faces))
+    Ok(faces)
 }
 
 fn draw_box_around_face(frame: &mut Mat, face: Rect) -> Result<()> {
@@ -164,11 +181,12 @@ fn draw_box_around_face(frame: &mut Mat, face: Rect) -> Result<()> {
 
 fn blur_face(frame: &mut Mat, face: Rect) -> Result<()> {
     let frame_copy = frame.clone();
-    let face_copy = Mat::roi(&frame_copy, face).unwrap();
+    let clamped_face = clamp_rect_to_image_bounds(face);
+    let face_roi = Mat::roi(&frame_copy, clamped_face).unwrap();
 
     let mut blurred = Mat::default();
     imgproc::gaussian_blur(
-        &face_copy,
+        &face_roi,
         &mut blurred,
         Size::new(BLUR_STRENGTH, BLUR_STRENGTH),
         0f64,
@@ -176,7 +194,7 @@ fn blur_face(frame: &mut Mat, face: Rect) -> Result<()> {
         0,
     )?;
 
-    let mut inset_image = Mat::roi(&frame, face).unwrap();
+    let mut inset_image = Mat::roi(&frame, clamped_face).unwrap();
 
     blurred.copy_to(&mut inset_image)?;
 
