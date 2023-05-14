@@ -6,7 +6,11 @@ use crate::constants::*;
 use anyhow::Result;
 use capture::Capture;
 use opencv::core::{Mat, Ptr, Rect, Scalar, Size, Vector, CV_32F};
-use opencv::{dnn, highgui, imgproc, objdetect, prelude::*, types};
+use opencv::{
+    dnn, highgui, imgproc, objdetect,
+    prelude::*,
+    types::{VectorOfMat, VectorOfRect},
+};
 use window::Window;
 
 fn preprocess_image(frame: &Mat) -> Result<Mat> {
@@ -29,7 +33,7 @@ fn equalize_image(reduced: &Mat) -> Result<Mat> {
 fn detect_faces(
     classifiers: &mut Vec<&mut objdetect::CascadeClassifier>,
     image: Mat,
-) -> Result<types::VectorOfRect> {
+) -> Result<VectorOfRect> {
     const SCALE_FACTOR: f64 = 1.1;
     const MIN_NEIGHBORS: i32 = 2;
     const FLAGS: i32 = 0;
@@ -42,7 +46,7 @@ fn detect_faces(
         height: 0,
     };
 
-    let mut faces = types::VectorOfRect::new();
+    let mut faces = VectorOfRect::new();
 
     for classifier in classifiers.iter_mut() {
         classifier.detect_multi_scale(
@@ -76,7 +80,7 @@ fn detect_faces_dnn(net: &mut dnn::Net, out_names: &Vector<String>, frame: &Mat)
 
     net.set_input(&mut blob, "", 1.0, Scalar::default())?;
 
-    let mut detections = types::VectorOfMat::new();
+    let mut detections = VectorOfMat::new();
 
     net.forward(&mut detections, &out_names)?;
 
@@ -108,16 +112,37 @@ fn detect_faces_dnn(net: &mut dnn::Net, out_names: &Vector<String>, frame: &Mat)
     Ok(())
 }
 
-fn detect_faces_yunet(face_detector: &mut Ptr<dyn FaceDetectorYN>, frame: &Mat) -> Result<()> {
-    let mut faces = types::VectorOfRect::new();
+fn detect_faces_yunet(
+    face_detector: &mut Ptr<dyn FaceDetectorYN>,
+    frame: &Mat,
+) -> Result<VectorOfRect> {
+    let mut detections = Mat::default();
+    let mut faces = VectorOfRect::new();
 
-    face_detector.detect(frame, &mut faces)?;
+    face_detector.detect(frame, &mut detections)?;
 
-    for face in faces {
-        println!("Face detected: {:?}", face);
+    for i in 0..detections.rows() {
+        let confidence = detections.at_2d::<f32>(i, 14)?;
+        let x1 = *(detections.at_2d::<f32>(i, 0)?) as i32;
+        let y1 = *(detections.at_2d::<f32>(i, 1)?) as i32;
+        let w = *(detections.at_2d::<f32>(i, 2)?) as i32;
+        let h = *(detections.at_2d::<f32>(i, 3)?) as i32;
+
+        if confidence > &DNN_CONFIDENCE_THRESHOLD {
+            let face = Rect {
+                x: x1,
+                y: y1,
+                width: w,
+                height: h,
+            };
+
+            faces.push(face);
+
+            println!("Face detected: {:?}", face);
+        }
     }
 
-    Ok(())
+    Ok((faces))
 }
 
 fn draw_box_around_face(frame: &mut Mat, face: Rect) -> Result<()> {
@@ -163,7 +188,7 @@ fn frame_loop(
     mut capture: Capture,
     classifiers: &mut Vec<&mut objdetect::CascadeClassifier>,
     //net: &mut dnn::Net,
-    //face_detector: &mut Ptr<dyn FaceDetectorYN>,
+    face_detector: &mut Ptr<dyn FaceDetectorYN>,
     //out_names: &Vector<String>,
     window: Window,
 ) -> Result<()> {
@@ -173,7 +198,7 @@ fn frame_loop(
             None => continue,
         };
 
-        let preprocessed = preprocess_image(&frame)?;
+        /* let preprocessed = preprocess_image(&frame)?;
         let faces = detect_faces(classifiers, preprocessed)?;
         for face in faces {
             println!("found face {:?}", face);
@@ -182,9 +207,17 @@ fn frame_loop(
             } else {
                 draw_box_around_face(&mut frame, face)?;
             }
-        }
+        } */
         //detect_faces_dnn(net, out_names, &frame)?;
-        //detect_faces_yunet(face_detector, &frame)?;
+
+        let faces = detect_faces_yunet(face_detector, &frame)?;
+        for face in faces {
+            if USE_BLUR {
+                blur_face(&mut frame, face)?;
+            } else {
+                draw_box_around_face(&mut frame, face)?;
+            }
+        }
 
         window.show_image(&frame)?;
 
@@ -208,8 +241,8 @@ fn main() -> Result<()> {
     net.set_preferable_target(dnn::DNN_TARGET_CUDA)?;
     let out_names = net.get_unconnected_out_layers_names()?; */
 
-    /* let mut face_detector: Ptr<dyn FaceDetectorYN> = <dyn objdetect::FaceDetectorYN>::create(
-        "models/face_detection_yunet_2022mar_int8.onnx",
+    let mut face_detector: Ptr<dyn FaceDetectorYN> = <dyn objdetect::FaceDetectorYN>::create(
+        "models/face_detection_yunet_2022mar.onnx",
         "",
         Size::new(CAPTURE_WIDTH, CAPTURE_HEIGHT),
         0.9f32,
@@ -217,7 +250,7 @@ fn main() -> Result<()> {
         5000,
         dnn::DNN_BACKEND_CUDA,
         dnn::DNN_TARGET_CUDA,
-    )?; */
+    )?;
 
     let window = Window::create("window", CAPTURE_WIDTH, CAPTURE_HEIGHT)?;
 
@@ -225,7 +258,7 @@ fn main() -> Result<()> {
         frame_loop(
             capture,
             &mut classifiers,
-            //&mut face_detector,
+            &mut face_detector,
             //&out_names,
             window,
         )?;
