@@ -1,3 +1,5 @@
+use opencv::core::{Point, Scalar};
+use opencv::imgproc;
 use opencv::{highgui, prelude::*};
 
 type Result<T> = opencv::Result<T>;
@@ -15,8 +17,22 @@ impl Window {
         })
     }
 
-    pub fn show_image(&self, frame: &Mat) -> Result<()> {
-        highgui::imshow(&self.name, &frame)
+    pub fn show_image(&self, frame: &mut Mat, fps: Option<f64>) -> Result<()> {
+        if let Some(fps) = fps {
+            imgproc::put_text(
+                frame,
+                &format!("FPS: {:.2}", fps),
+                Point::new(10, 20),
+                imgproc::FONT_HERSHEY_SIMPLEX,
+                0.5,
+                Scalar::new(0., 0., 255., 0.),
+                1,
+                imgproc::LINE_8,
+                false,
+            )?;
+        }
+
+        highgui::imshow(&self.name, frame)
     }
 }
 

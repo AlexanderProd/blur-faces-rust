@@ -1,24 +1,13 @@
 mod capture;
+mod constants;
 mod window;
 
+use crate::constants::*;
 use anyhow::Result;
 use capture::Capture;
-use opencv::core::{Mat, Rect, Scalar, Size};
-use opencv::{highgui, imgproc, objdetect, prelude::*, types};
+use opencv::core::{Mat, Ptr, Rect, Scalar, Size, TickMeter};
+use opencv::{dnn, highgui, imgproc, objdetect, prelude::*, types::VectorOfRect};
 use window::Window;
-
-const CASCADE_XML_FILE: &str = "haarcascade_frontalface_alt.xml";
-
-const CAPTURE_WIDTH: i32 = 800;
-const CAPTURE_HEIGHT: i32 = 600;
-
-const SCALE_FACTOR: f64 = 1f64;
-const SCALE_FACTOR_INV: i32 = (1f64 / SCALE_FACTOR) as i32;
-
-const USE_BLUR: bool = true;
-const BLUR_STRENGTH: i32 = 77;
-
-const Q_KEY_CODE: i32 = 113;
 
 fn preprocess_image(frame: &Mat) -> Result<Mat> {
     let gray = convert_to_grayscale(frame)?;
@@ -37,37 +26,77 @@ fn equalize_image(reduced: &Mat) -> Result<Mat> {
     Ok(equalized)
 }
 
-fn detect_faces(
-    classifier: &mut objdetect::CascadeClassifier,
-    image: Mat,
-) -> Result<types::VectorOfRect> {
-    const SCALE_FACTOR: f64 = 1.1;
-    const MIN_NEIGHBORS: i32 = 2;
-    const FLAGS: i32 = 0;
-    const MIN_FACE_SIZE: Size = Size {
-        width: 30,
-        height: 30,
-    };
-    const MAX_FACE_SIZE: Size = Size {
-        width: 0,
-        height: 0,
-    };
+fn clamp_rect_to_image_bounds(rect: Rect) -> Rect {
+    let mut rect = rect.clone();
+    if rect.x < 0 {
+        rect.x = 0;
+    }
+    if rect.y < 0 {
+        rect.y = 0;
+    }
+    if rect.x + rect.width > CAPTURE_WIDTH {
+        rect.width = CAPTURE_WIDTH - rect.x;
+    }
+    if rect.y + rect.height > CAPTURE_HEIGHT {
+        rect.height = CAPTURE_HEIGHT - rect.y;
+    }
+    rect
+}
 
-    let mut faces = types::VectorOfRect::new();
-    classifier.detect_multi_scale(
-        &image,
-        &mut faces,
-        SCALE_FACTOR,
-        MIN_NEIGHBORS,
-        FLAGS,
-        MIN_FACE_SIZE,
-        MAX_FACE_SIZE,
-    )?;
+fn detect_faces(
+    classifiers: &mut Vec<&mut objdetect::CascadeClassifier>,
+    image: Mat,
+) -> Result<VectorOfRect> {
+    let mut faces = VectorOfRect::new();
+
+    for classifier in classifiers.iter_mut() {
+        classifier.detect_multi_scale(
+            &image,
+            &mut faces,
+            1f64,
+            2,
+            0,
+            Size::new(30, 30),
+            Size::new(0, 0),
+        )?;
+    }
+    Ok(faces)
+}
+
+fn detect_faces_yunet(
+    face_detector: &mut Ptr<dyn FaceDetectorYN>,
+    frame: &Mat,
+) -> Result<VectorOfRect> {
+    let mut detections = Mat::default();
+    let mut faces = VectorOfRect::new();
+
+    face_detector.detect(frame, &mut detections)?;
+
+    for i in 0..detections.rows() {
+        let confidence = detections.at_2d::<f32>(i, 14)?;
+        let x1 = *(detections.at_2d::<f32>(i, 0)?) as i32;
+        let y1 = *(detections.at_2d::<f32>(i, 1)?) as i32;
+        let w = *(detections.at_2d::<f32>(i, 2)?) as i32;
+        let h = *(detections.at_2d::<f32>(i, 3)?) as i32;
+
+        if confidence > &DNN_CONFIDENCE_THRESHOLD {
+            let face = Rect {
+                x: x1,
+                y: y1,
+                width: w,
+                height: h,
+            };
+
+            faces.push(face);
+
+            println!("Face detected: {:?}", face);
+        }
+    }
+
     Ok(faces)
 }
 
 fn draw_box_around_face(frame: &mut Mat, face: Rect) -> Result<()> {
-    println!("found face {:?}", face);
     let scaled_face = Rect {
         x: face.x * SCALE_FACTOR_INV,
         y: face.y * SCALE_FACTOR_INV,
@@ -86,11 +115,12 @@ fn draw_box_around_face(frame: &mut Mat, face: Rect) -> Result<()> {
 
 fn blur_face(frame: &mut Mat, face: Rect) -> Result<()> {
     let frame_copy = frame.clone();
-    let face_copy = Mat::roi(&frame_copy, face).unwrap();
+    let clamped_face = clamp_rect_to_image_bounds(face);
+    let face_roi = Mat::roi(&frame_copy, clamped_face).unwrap();
 
     let mut blurred = Mat::default();
     imgproc::gaussian_blur(
-        &face_copy,
+        &face_roi,
         &mut blurred,
         Size::new(BLUR_STRENGTH, BLUR_STRENGTH),
         0f64,
@@ -98,7 +128,7 @@ fn blur_face(frame: &mut Mat, face: Rect) -> Result<()> {
         0,
     )?;
 
-    let mut inset_image = Mat::roi(&frame, face).unwrap();
+    let mut inset_image = Mat::roi(&frame, clamped_face).unwrap();
 
     blurred.copy_to(&mut inset_image)?;
 
@@ -108,7 +138,8 @@ fn blur_face(frame: &mut Mat, face: Rect) -> Result<()> {
 
 fn frame_loop(
     mut capture: Capture,
-    mut classifier: &mut objdetect::CascadeClassifier,
+    classifiers: &mut Vec<&mut objdetect::CascadeClassifier>,
+    face_detector: &mut Ptr<dyn FaceDetectorYN>,
     window: Window,
 ) -> Result<()> {
     loop {
@@ -117,17 +148,35 @@ fn frame_loop(
             None => continue,
         };
 
-        let preprocessed = preprocess_image(&frame)?;
-        let faces = detect_faces(&mut classifier, preprocessed)?;
-        for face in faces {
-            if USE_BLUR {
-                blur_face(&mut frame, face)?;
-            } else {
-                draw_box_around_face(&mut frame, face)?;
+        let mut tick_meter = TickMeter::default()?;
+        if USE_YUNET {
+            tick_meter.start()?;
+            let faces = detect_faces_yunet(face_detector, &frame)?;
+            tick_meter.stop()?;
+            for face in faces {
+                if USE_BLUR {
+                    blur_face(&mut frame, face)?;
+                } else {
+                    draw_box_around_face(&mut frame, face)?;
+                }
+            }
+        } else {
+            tick_meter.start()?;
+            let preprocessed = preprocess_image(&frame)?;
+            let faces = detect_faces(classifiers, preprocessed)?;
+            tick_meter.stop()?;
+            for face in faces {
+                println!("found face {:?}", face);
+                if USE_BLUR {
+                    blur_face(&mut frame, face)?;
+                } else {
+                    draw_box_around_face(&mut frame, face)?;
+                }
             }
         }
 
-        window.show_image(&frame)?;
+        window.show_image(&mut frame, Some(tick_meter.get_fps()?))?;
+        tick_meter.reset()?;
 
         let key = highgui::wait_key(1)?;
         if key == Q_KEY_CODE {
@@ -142,11 +191,23 @@ fn main() -> Result<()> {
     let capture = Capture::create(0, CAPTURE_WIDTH, CAPTURE_HEIGHT)?;
 
     let mut classifier = objdetect::CascadeClassifier::new(CASCADE_XML_FILE)?;
+    let mut classifiers = vec![&mut classifier];
+
+    let mut face_detector: Ptr<dyn FaceDetectorYN> = <dyn objdetect::FaceDetectorYN>::create(
+        YUNET_MODEL_FILE,
+        "",
+        Size::new(CAPTURE_WIDTH, CAPTURE_HEIGHT),
+        0.9f32,
+        0.3f32,
+        5000,
+        dnn::DNN_BACKEND_CUDA,
+        dnn::DNN_TARGET_CUDA,
+    )?;
 
     let window = Window::create("window", CAPTURE_WIDTH, CAPTURE_HEIGHT)?;
 
     if capture.is_opened()? {
-        frame_loop(capture, &mut classifier, window)?;
+        frame_loop(capture, &mut classifiers, &mut face_detector, window)?;
     }
 
     Ok(())
