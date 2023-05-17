@@ -142,13 +142,13 @@ fn frame_loop(
     face_detector: &mut Ptr<dyn FaceDetectorYN>,
     window: Window,
 ) -> Result<()> {
+    let mut tick_meter = TickMeter::default()?;
     loop {
         let mut frame = match capture.grab_frame()? {
             Some(frame) => frame,
             None => continue,
         };
 
-        let mut tick_meter = TickMeter::default()?;
         if USE_YUNET {
             tick_meter.start()?;
             let faces = detect_faces_yunet(face_detector, &frame)?;
