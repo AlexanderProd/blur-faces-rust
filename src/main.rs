@@ -6,7 +6,12 @@ use crate::constants::*;
 use anyhow::Result;
 use capture::Capture;
 use opencv::core::{Mat, Ptr, Rect, Scalar, Size, TickMeter};
-use opencv::{dnn, highgui, imgproc, objdetect, prelude::*, types::VectorOfRect};
+use opencv::{
+    dnn, highgui, imgproc,
+    objdetect::{CascadeClassifier, FaceDetectorYN},
+    prelude::*,
+    types::VectorOfRect,
+};
 use window::Window;
 
 fn preprocess_image(frame: &Mat) -> Result<Mat> {
@@ -43,10 +48,7 @@ fn clamp_rect_to_image_bounds(rect: Rect) -> Rect {
     rect
 }
 
-fn detect_faces(
-    classifiers: &mut Vec<&mut objdetect::CascadeClassifier>,
-    image: Mat,
-) -> Result<VectorOfRect> {
+fn detect_faces(classifiers: &mut Vec<&mut CascadeClassifier>, image: Mat) -> Result<VectorOfRect> {
     let mut faces = VectorOfRect::new();
 
     for classifier in classifiers.iter_mut() {
@@ -64,7 +66,7 @@ fn detect_faces(
 }
 
 fn detect_faces_yunet(
-    face_detector: &mut Ptr<dyn FaceDetectorYN>,
+    face_detector: &mut Ptr<FaceDetectorYN>,
     frame: &Mat,
 ) -> Result<VectorOfRect> {
     let mut detections = Mat::default();
@@ -138,8 +140,8 @@ fn blur_face(frame: &mut Mat, face: Rect) -> Result<()> {
 
 fn frame_loop(
     mut capture: Capture,
-    classifiers: &mut Vec<&mut objdetect::CascadeClassifier>,
-    face_detector: &mut Ptr<dyn FaceDetectorYN>,
+    classifiers: &mut Vec<&mut CascadeClassifier>,
+    face_detector: &mut Ptr<FaceDetectorYN>,
     window: Window,
 ) -> Result<()> {
     let mut tick_meter = TickMeter::default()?;
@@ -190,10 +192,10 @@ fn main() -> Result<()> {
 
     let capture = Capture::create(0, CAPTURE_WIDTH, CAPTURE_HEIGHT)?;
 
-    let mut classifier = objdetect::CascadeClassifier::new(CASCADE_XML_FILE)?;
+    let mut classifier = CascadeClassifier::new(CASCADE_XML_FILE)?;
     let mut classifiers = vec![&mut classifier];
 
-    let mut face_detector: Ptr<dyn FaceDetectorYN> = <dyn objdetect::FaceDetectorYN>::create(
+    let mut face_detector = FaceDetectorYN::create(
         YUNET_MODEL_FILE,
         "",
         Size::new(CAPTURE_WIDTH, CAPTURE_HEIGHT),
