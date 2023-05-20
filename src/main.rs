@@ -1,5 +1,6 @@
 mod capture;
 mod constants;
+mod output;
 mod window;
 
 use crate::constants::*;
@@ -12,6 +13,7 @@ use opencv::{
     prelude::*,
     types::VectorOfRect,
 };
+use output::Output;
 use window::Window;
 
 fn preprocess_image(frame: &Mat) -> Result<Mat> {
@@ -143,6 +145,7 @@ fn frame_loop(
     classifiers: &mut Vec<&mut CascadeClassifier>,
     face_detector: &mut Ptr<FaceDetectorYN>,
     window: Window,
+    output: &mut Option<Output>,
 ) -> Result<()> {
     let mut tick_meter = TickMeter::default()?;
     loop {
@@ -177,6 +180,12 @@ fn frame_loop(
             }
         }
 
+        if let Some(output) = output {
+            if output.is_opened()? {
+                output.write_frame(&frame)?;
+            }
+        }
+
         window.show_image(&mut frame, Some(tick_meter.get_fps()?))?;
         tick_meter.reset()?;
 
@@ -185,12 +194,26 @@ fn frame_loop(
             break;
         }
     }
+
+    if OUTPUT_VIDEO {
+        std::thread::sleep(std::time::Duration::from_secs_f32(1.0 / OUTPUT_FPS as f32));
+    }
+
     Ok(())
 }
 fn main() -> Result<()> {
     highgui::named_window("window", highgui::WINDOW_FULLSCREEN)?;
 
     let capture = Capture::create(0, CAPTURE_WIDTH, CAPTURE_HEIGHT)?;
+
+    let mut output = match OUTPUT_VIDEO {
+        true => Some(Output::create(
+            OUTPUT_VIDEO_FILE,
+            CAPTURE_WIDTH,
+            CAPTURE_HEIGHT,
+        )?),
+        false => None,
+    };
 
     let mut classifier = CascadeClassifier::new(CASCADE_XML_FILE)?;
     let mut classifiers = vec![&mut classifier];
@@ -209,7 +232,13 @@ fn main() -> Result<()> {
     let window = Window::create("window", CAPTURE_WIDTH, CAPTURE_HEIGHT)?;
 
     if capture.is_opened()? {
-        frame_loop(capture, &mut classifiers, &mut face_detector, window)?;
+        frame_loop(
+            capture,
+            &mut classifiers,
+            &mut face_detector,
+            window,
+            &mut output,
+        )?;
     }
 
     Ok(())
