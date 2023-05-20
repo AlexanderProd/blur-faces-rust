@@ -1,6 +1,9 @@
 use crate::constants::*;
 use opencv::core::Size;
-use opencv::{prelude::*, videoio::VideoWriter};
+use opencv::{
+    prelude::*,
+    videoio::{VideoWriter, VideoWriterTrait, VideoWriterTraitConst},
+};
 
 type Result<T> = opencv::Result<T>;
 
